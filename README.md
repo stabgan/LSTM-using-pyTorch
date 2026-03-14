@@ -15,16 +15,11 @@ The model treats each 28×28 image as a sequence of 28 time steps with 28 featur
 | Loss | CrossEntropyLoss |
 | Epochs | 5 (~3000 iterations) |
 
-## Tech Stack
-
-| | Technology |
-|---|---|
-| 🐍 | Python 3.x |
-| 🔥 | PyTorch |
-| 🖼️ | torchvision |
-| 🧮 | CUDA (optional, auto-detected) |
-
 ## Requirements
+
+- Python 3.x
+- PyTorch
+- torchvision
 
 ```bash
 pip install torch torchvision
@@ -36,19 +31,21 @@ pip install torch torchvision
 python lstm.py
 ```
 
-MNIST data downloads automatically to `./data/` on first run.
+MNIST data will be downloaded automatically to `./data/` on first run.
 
 The model trains for 5 epochs and prints test accuracy every 500 iterations.
 
 ## Results
 
-Reaches ~98% accuracy on the MNIST test set after training.
+The model reaches **~98% accuracy** on the MNIST test set after training.
+
+![results](https://image.ibb.co/gMpuv7/Screen_Shot_2018_03_09_at_2_16_31_PM.png)
 
 ## Known Issues
 
-- Training runs on CPU by default if CUDA is not available — this is slow but functional.
-- No learning rate scheduler; accuracy may plateau with longer training.
-- No model checkpointing — training restarts from scratch each run.
+- `loss.data[0]` is deprecated in PyTorch ≥ 0.5 — replace with `loss.item()`
+- `Variable` wrapper is deprecated since PyTorch 0.4 — tensors have autograd built-in now
+- No `model.eval()` or `torch.no_grad()` during test evaluation
 
 ## License
 
