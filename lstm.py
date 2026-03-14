@@ -1,160 +1,132 @@
+"""LSTM on MNIST — 3-layer LSTM for handwritten digit classification using PyTorch."""
+
+import os
+
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 import torchvision.datasets as dsets
 
-# Device configuration
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# ---------------------------------------------------------------------------
+# Hyperparameters
+# ---------------------------------------------------------------------------
+INPUT_DIM = 28        # Each row of the 28×28 image is one time-step feature
+SEQ_DIM = 28          # 28 time steps (rows) per image
+HIDDEN_DIM = 100
+LAYER_DIM = 3         # 3 stacked LSTM layers
+OUTPUT_DIM = 10       # Digits 0-9
+BATCH_SIZE = 100
+N_ITERS = 3000
+LEARNING_RATE = 0.1
 
-'''
-STEP 1: LOADING DATASET
-'''
-train_dataset = dsets.MNIST(root='./data',
-                            train=True,
-                            transform=transforms.ToTensor(),
-                            download=True)
 
-test_dataset = dsets.MNIST(root='./data',
-                           train=False,
-                           transform=transforms.ToTensor())
-
-'''
-STEP 2: MAKING DATASET ITERABLE
-'''
-
-batch_size = 100
-n_iters = 3000
-num_epochs = n_iters / (len(train_dataset) / batch_size)
-num_epochs = int(num_epochs)
-
-train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
-                                           batch_size=batch_size,
-                                           shuffle=True)
-
-test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
-                                          batch_size=batch_size,
-                                          shuffle=False)
-
-'''
-STEP 3: CREATE MODEL CLASS
-'''
-
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
 class LSTMModel(nn.Module):
+    """Stacked LSTM followed by a fully-connected classifier."""
+
     def __init__(self, input_dim, hidden_dim, layer_dim, output_dim):
-        super(LSTMModel, self).__init__()
-        # Hidden dimensions
+        super().__init__()
         self.hidden_dim = hidden_dim
-
-        # Number of hidden layers
         self.layer_dim = layer_dim
-
-        # Building your LSTM
-        # batch_first=True causes input/output tensors to be of shape
-        # (batch_dim, seq_dim, feature_dim)
         self.lstm = nn.LSTM(input_dim, hidden_dim, layer_dim, batch_first=True)
-
-        # Readout layer
         self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
-        # Initialize hidden state with zeros
-        h0 = torch.zeros(self.layer_dim, x.size(0), self.hidden_dim).to(x.device)
+        # Initialise hidden & cell states with zeros on the same device as x
+        h0 = torch.zeros(self.layer_dim, x.size(0), self.hidden_dim, device=x.device)
+        c0 = torch.zeros(self.layer_dim, x.size(0), self.hidden_dim, device=x.device)
 
-        # Initialize cell state
-        c0 = torch.zeros(self.layer_dim, x.size(0), self.hidden_dim).to(x.device)
-
-        # One time step
-        out, (hn, cn) = self.lstm(x, (h0, c0))
-
-        # Index hidden state of last time step
-        # out.size() --> 100, 28, 100
-        # out[:, -1, :] --> 100, 100 --> just want last time step hidden states!
+        out, _ = self.lstm(x, (h0, c0))
+        # Use the hidden state from the last time step
         out = self.fc(out[:, -1, :])
-        # out.size() --> 100, 10
         return out
 
-'''
-STEP 4: INSTANTIATE MODEL CLASS
-'''
-input_dim = 28
-hidden_dim = 100
-layer_dim = 3  # ONLY CHANGE IS HERE FROM ONE LAYER TO TWO LAYER
-output_dim = 10
 
-model = LSTMModel(input_dim, hidden_dim, layer_dim, output_dim)
-model.to(device)
+# ---------------------------------------------------------------------------
+# Training & evaluation helpers
+# ---------------------------------------------------------------------------
 
-'''
-STEP 5: INSTANTIATE LOSS CLASS
-'''
-criterion = nn.CrossEntropyLoss()
+def evaluate(model, test_loader, device):
+    """Run the model on the test set and return accuracy (%)."""
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images = images.view(-1, SEQ_DIM, INPUT_DIM).to(device)
+            labels = labels.to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    return 100.0 * correct / total
 
-'''
-STEP 6: INSTANTIATE OPTIMIZER CLASS
-'''
-learning_rate = 0.1
 
-optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+def train(model, train_loader, test_loader, criterion, optimizer, num_epochs, device):
+    """Train the model and print test accuracy every 500 iterations."""
+    iter_count = 0
+    for epoch in range(num_epochs):
+        model.train()
+        for images, labels in train_loader:
+            images = images.view(-1, SEQ_DIM, INPUT_DIM).to(device)
+            labels = labels.to(device)
 
-'''
-STEP 7: TRAIN THE MODEL
-'''
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
-# Number of steps to unroll
-seq_dim = 28
+            iter_count += 1
 
-iter_count = 0
-for epoch in range(num_epochs):
-    model.train()
-    for i, (images, labels) in enumerate(train_loader):
-        # Load images as tensors to device
-        images = images.view(-1, seq_dim, input_dim).to(device)
-        labels = labels.to(device)
+            if iter_count % 500 == 0:
+                accuracy = evaluate(model, test_loader, device)
+                print(
+                    f"Iteration: {iter_count}. "
+                    f"Loss: {loss.item():.4f}. "
+                    f"Accuracy: {accuracy:.2f}%"
+                )
+                # Resume training mode after evaluation
+                model.train()
 
-        # Clear gradients w.r.t. parameters
-        optimizer.zero_grad()
 
-        # Forward pass to get output/logits
-        # outputs.size() --> 100, 10
-        outputs = model(images)
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Calculate Loss: softmax --> cross entropy loss
-        loss = criterion(outputs, labels)
+    # Resolve data directory relative to this script
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-        # Getting gradients w.r.t. parameters
-        loss.backward()
+    # Step 1 — Load MNIST dataset
+    train_dataset = dsets.MNIST(
+        root=data_dir, train=True, transform=transforms.ToTensor(), download=True
+    )
+    test_dataset = dsets.MNIST(
+        root=data_dir, train=False, transform=transforms.ToTensor()
+    )
 
-        # Updating parameters
-        optimizer.step()
+    num_epochs = int(N_ITERS / (len(train_dataset) / BATCH_SIZE))
 
-        iter_count += 1
+    # Step 2 — Create data loaders
+    train_loader = torch.utils.data.DataLoader(
+        dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True
+    )
+    test_loader = torch.utils.data.DataLoader(
+        dataset=test_dataset, batch_size=BATCH_SIZE, shuffle=False
+    )
 
-        if iter_count % 500 == 0:
-            # Calculate Accuracy
-            correct = 0
-            total = 0
+    # Step 3 — Build model, loss, and optimizer
+    model = LSTMModel(INPUT_DIM, HIDDEN_DIM, LAYER_DIM, OUTPUT_DIM).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
 
-            model.eval()
-            with torch.no_grad():
-                # Iterate through test dataset
-                for images, labels in test_loader:
-                    images = images.view(-1, seq_dim, input_dim).to(device)
-                    labels = labels.to(device)
+    # Step 4 — Train
+    train(model, train_loader, test_loader, criterion, optimizer, num_epochs, device)
 
-                    # Forward pass only to get logits/output
-                    outputs = model(images)
 
-                    # Get predictions from the maximum value
-                    _, predicted = torch.max(outputs.data, 1)
-
-                    # Total number of labels
-                    total += labels.size(0)
-
-                    # Total correct predictions
-                    correct += (predicted == labels).sum().item()
-
-            accuracy = 100 * correct / total
-
-            # Print Loss
-            print('Iteration: {}. Loss: {:.4f}. Accuracy: {:.2f}%'.format(
-                iter_count, loss.item(), accuracy))
+if __name__ == "__main__":
+    main()
